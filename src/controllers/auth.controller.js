@@ -1,5 +1,6 @@
 import User from "../models/user.model.js";
 import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
 import { generateToken } from "../utils/generateToken.js";
 import ApiResponseUtil from "../utils/apiResponse.js";
 import {
@@ -11,25 +12,23 @@ import {
 } from "../utils/validators.js";
 import {
   sendVerificationEmail,
+  sendWelcomeEmail,
+  sendPasswordResetEmail,
   generateToken as generateVerificationToken,
 } from "../services/email.service.js";
 
-// Check username availability API endpoint
+// Check Username
 export const checkUsername = async (req, res) => {
   try {
     const { username } = req.params;
-
-    if (!username) {
+    if (!username)
       return ApiResponseUtil.badRequest(res, "Username is required");
-    }
 
     const usernameValidation = validateUsername(username);
-    if (!usernameValidation.isValid) {
+    if (!usernameValidation.isValid)
       return ApiResponseUtil.badRequest(res, usernameValidation.message);
-    }
 
     const availability = await checkUsernameAvailability(username, User);
-
     return ApiResponseUtil.success(res, {
       isAvailable: availability.isAvailable,
       suggestions: availability.suggestions,
@@ -46,60 +45,48 @@ export const checkUsername = async (req, res) => {
   }
 };
 
-// Signup with email verification
+// Sign Up
 export const signUp = async (req, res) => {
   try {
     const { fullName, userName, email, password } = req.body;
 
-    // 1. Validate all fields
     const emailValidation = validateEmail(email);
-    if (!emailValidation.isValid) {
+    if (!emailValidation.isValid)
       return ApiResponseUtil.badRequest(res, emailValidation.message);
-    }
 
     const usernameValidation = validateUsername(userName);
-    if (!usernameValidation.isValid) {
+    if (!usernameValidation.isValid)
       return ApiResponseUtil.badRequest(res, usernameValidation.message);
-    }
 
     const fullNameValidation = validateFullName(fullName);
-    if (!fullNameValidation.isValid) {
+    if (!fullNameValidation.isValid)
       return ApiResponseUtil.badRequest(res, fullNameValidation.message);
-    }
 
     const passwordValidation = validatePassword(password);
-    if (!passwordValidation.isValid) {
+    if (!passwordValidation.isValid)
       return ApiResponseUtil.badRequest(res, passwordValidation.message);
-    }
 
-    // 2. Check if email already exists
     const existingEmail = await User.findOne({ email: email.toLowerCase() });
-    if (existingEmail) {
+    if (existingEmail)
       return ApiResponseUtil.conflict(res, "Email already registered");
-    }
 
-    // 3. Check username availability
     const usernameAvailability = await checkUsernameAvailability(
       userName,
       User
     );
     if (!usernameAvailability.isAvailable) {
-      return ApiResponseUtil.conflict(res, {
-        message: "Username already taken",
+      return ApiResponseUtil.error(res, "Username already taken", 409, {
         suggestions: usernameAvailability.suggestions,
       });
     }
 
-    // 4. Hash password
     const salt = await bcrypt.genSalt(12);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    // 5. Generate verification token
     const verificationToken = generateVerificationToken();
     const verificationTokenExpiry = new Date();
-    verificationTokenExpiry.setHours(verificationTokenExpiry.getHours() + 24); // 24 hours expiry
+    verificationTokenExpiry.setHours(verificationTokenExpiry.getHours() + 24);
 
-    // 6. Create user (unverified)
     const newUser = new User({
       fullName: fullName.trim(),
       userName: userName.toLowerCase().trim(),
@@ -115,53 +102,45 @@ export const signUp = async (req, res) => {
 
     await newUser.save();
 
-    // 7. Send verification email
     const emailResult = await sendVerificationEmail(
       newUser.email,
       newUser.fullName,
       verificationToken
     );
 
+    const userData = {
+      user: {
+        id: newUser._id,
+        fullName: newUser.fullName,
+        userName: newUser.userName,
+        email: newUser.email,
+        profilePicture: newUser.profilePicture,
+      },
+    };
+
     if (!emailResult.success) {
       console.error("Failed to send verification email:", emailResult.error);
-      // Still return success but warn user
       return ApiResponseUtil.created(
         res,
         {
-          user: {
-            id: newUser._id,
-            fullName: newUser.fullName,
-            userName: newUser.userName,
-            email: newUser.email,
-            profilePicture: newUser.profilePicture,
-          },
-          message:
-            "Account created! Please check your email to verify your account.",
+          ...userData,
           emailWarning:
             "Verification email could not be sent. Please contact support.",
         },
-        "Account created successfully! Please verify your email."
+        "Account created! Email verification failed — contact support."
       );
     }
 
-    // 8. Return response (don't send token until verified)
     return ApiResponseUtil.created(
       res,
       {
-        user: {
-          id: newUser._id,
-          fullName: newUser.fullName,
-          userName: newUser.userName,
-          email: newUser.email,
-          profilePicture: newUser.profilePicture,
-        },
+        ...userData,
         message: "Verification email sent! Please check your inbox.",
       },
-      "Account created! Please verify your email to start chatting."
+      "Account created! Please verify your email."
     );
   } catch (error) {
     console.error("Signup error:", error);
-
     if (error.code === 11000) {
       const field = Object.keys(error.keyPattern)[0];
       return ApiResponseUtil.conflict(
@@ -169,7 +148,6 @@ export const signUp = async (req, res) => {
         `${field === "email" ? "Email" : "Username"} already exists`
       );
     }
-
     return ApiResponseUtil.serverError(res, "Unable to create account");
   }
 };
@@ -178,12 +156,9 @@ export const signUp = async (req, res) => {
 export const verifyEmail = async (req, res) => {
   try {
     const { token } = req.params;
-
-    if (!token) {
+    if (!token)
       return ApiResponseUtil.badRequest(res, "Verification token is required");
-    }
 
-    // Find user with this token and not expired
     const user = await User.findOne({
       verificationToken: token,
       verificationTokenExpiry: { $gt: new Date() },
@@ -197,19 +172,16 @@ export const verifyEmail = async (req, res) => {
       );
     }
 
-    // Update user as verified
     user.isVerified = true;
     user.verificationToken = undefined;
     user.verificationTokenExpiry = undefined;
     await user.save();
 
-    // Send welcome email after verification
-    const { sendWelcomeEmail } = await import("../services/email.service.js");
+    // Fire and forget — don't block response
     sendWelcomeEmail(user.email, user.fullName, user.userName).catch(
       console.error
     );
 
-    // Generate token for auto-login
     const authToken = generateToken(user._id, res);
 
     return ApiResponseUtil.success(
@@ -217,7 +189,6 @@ export const verifyEmail = async (req, res) => {
       {
         user: user.profile,
         token: authToken,
-        message: "Email verified successfully! You can now start chatting.",
       },
       "Email verified! Welcome to Synkro 🎉"
     );
@@ -227,30 +198,23 @@ export const verifyEmail = async (req, res) => {
   }
 };
 
-// Resend Verification Email
+// Resend Verification
 export const resendVerificationEmail = async (req, res) => {
   try {
     const { email } = req.body;
-
-    if (!email) {
-      return ApiResponseUtil.badRequest(res, "Email is required");
-    }
+    if (!email) return ApiResponseUtil.badRequest(res, "Email is required");
 
     const user = await User.findOne({
       email: email.toLowerCase(),
       isVerified: false,
     });
-
-    if (!user) {
+    if (!user)
       return ApiResponseUtil.badRequest(
         res,
         "User not found or already verified"
       );
-    }
 
-    // Generate new verification token
-    const { generateToken } = await import("../services/email.service.js");
-    const verificationToken = generateToken();
+    const verificationToken = generateVerificationToken();
     const verificationTokenExpiry = new Date();
     verificationTokenExpiry.setHours(verificationTokenExpiry.getHours() + 24);
 
@@ -258,30 +222,18 @@ export const resendVerificationEmail = async (req, res) => {
     user.verificationTokenExpiry = verificationTokenExpiry;
     await user.save();
 
-    // Send new verification email
-    const { sendVerificationEmail } = await import(
-      "../services/email.service.js"
-    );
     const emailResult = await sendVerificationEmail(
       user.email,
       user.fullName,
       verificationToken
     );
-
-    if (!emailResult.success) {
+    if (!emailResult.success)
       return ApiResponseUtil.serverError(
         res,
         "Failed to send verification email"
       );
-    }
 
-    return ApiResponseUtil.success(
-      res,
-      {
-        message: "Verification email resent. Please check your inbox.",
-      },
-      "Verification email sent!"
-    );
+    return ApiResponseUtil.success(res, null, "Verification email sent!");
   } catch (error) {
     console.error("Resend verification error:", error);
     return ApiResponseUtil.serverError(
@@ -291,24 +243,18 @@ export const resendVerificationEmail = async (req, res) => {
   }
 };
 
-// Login (only allow verified users)
+// Login
 export const login = async (req, res) => {
   try {
     const { email, password } = req.body;
-
-    if (!email || !password) {
+    if (!email || !password)
       return ApiResponseUtil.badRequest(res, "Email and password are required");
-    }
 
     const user = await User.findOne({ email: email.toLowerCase() }).select(
       "+password"
     );
+    if (!user) return ApiResponseUtil.unauthorized(res, "Invalid credentials");
 
-    if (!user) {
-      return ApiResponseUtil.unauthorized(res, "Invalid credentials");
-    }
-
-    // Check if email is verified
     if (!user.isVerified) {
       return ApiResponseUtil.unauthorized(
         res,
@@ -317,12 +263,9 @@ export const login = async (req, res) => {
     }
 
     const isPasswordValid = await bcrypt.compare(password, user.password);
-
-    if (!isPasswordValid) {
+    if (!isPasswordValid)
       return ApiResponseUtil.unauthorized(res, "Invalid credentials");
-    }
 
-    // Update last login
     user.lastLogin = new Date();
     await user.save();
 
@@ -339,5 +282,231 @@ export const login = async (req, res) => {
   } catch (error) {
     console.error("Login error:", error);
     return ApiResponseUtil.serverError(res, "Login failed");
+  }
+};
+
+// Logout
+export const logout = async (req, res) => {
+  try {
+    const token =
+      req.cookies?.synkroKey || req.headers.authorization?.split(" ")[1];
+    const isProd = process.env.NODE_ENV === "production";
+    const clearCookieOpts = {
+      httpOnly: true,
+      expires: new Date(0),
+      secure: isProd,
+      sameSite: isProd ? "none" : "lax",
+      path: "/",
+    };
+
+    res.cookie("synkroKey", "", clearCookieOpts);
+    res.cookie("refreshToken", "", clearCookieOpts);
+
+    if (token) {
+      const { addToTokenBlacklist } =
+        await import("../utils/tokenBlacklist.js");
+      await addToTokenBlacklist(token);
+    }
+
+    // req.user is full Mongoose doc from protect middleware
+    await User.findByIdAndUpdate(req.user._id, {
+      status: "offline",
+      socketId: null,
+    });
+
+    return ApiResponseUtil.success(res, null, "Logout successful");
+  } catch (error) {
+    console.error("Logout error:", error);
+    return ApiResponseUtil.serverError(res, "Logout failed");
+  }
+};
+
+// Get Current User
+export const getCurrentUser = async (req, res) => {
+  try {
+    // req.user already attached by protect middleware (no extra DB call needed)
+    return ApiResponseUtil.success(
+      res,
+      req.user.profile,
+      "User fetched successfully"
+    );
+  } catch (error) {
+    console.error("Get current user error:", error);
+    return ApiResponseUtil.serverError(res, "Failed to get user");
+  }
+};
+
+// Forgot Password
+export const forgotPassword = async (req, res) => {
+  // Always return same message to prevent email enumeration attack
+  const genericMsg =
+    "If this email exists, a password reset link has been sent.";
+  try {
+    const { email } = req.body;
+    if (!email) return ApiResponseUtil.badRequest(res, "Email is required");
+
+    const user = await User.findOne({ email: email.toLowerCase() });
+    if (!user) return ApiResponseUtil.success(res, null, genericMsg);
+
+    const resetToken = generateVerificationToken();
+    const resetTokenExpiry = new Date();
+    resetTokenExpiry.setHours(resetTokenExpiry.getHours() + 1);
+
+    user.resetPasswordToken = resetToken;
+    user.resetPasswordExpiry = resetTokenExpiry;
+    await user.save();
+
+    await sendPasswordResetEmail(user.email, user.fullName, resetToken);
+
+    return ApiResponseUtil.success(res, null, genericMsg);
+  } catch (error) {
+    console.error("Forgot password error:", error);
+    return ApiResponseUtil.success(res, null, genericMsg);
+  }
+};
+
+// Reset Password
+export const resetPassword = async (req, res) => {
+  try {
+    const { token, newPassword } = req.body;
+    if (!token || !newPassword)
+      return ApiResponseUtil.badRequest(
+        res,
+        "Token and new password are required"
+      );
+
+    const passwordValidation = validatePassword(newPassword);
+    if (!passwordValidation.isValid)
+      return ApiResponseUtil.badRequest(res, passwordValidation.message);
+
+    const user = await User.findOne({
+      resetPasswordToken: token,
+      resetPasswordExpiry: { $gt: new Date() },
+    });
+
+    if (!user)
+      return ApiResponseUtil.badRequest(res, "Invalid or expired reset token");
+
+    const salt = await bcrypt.genSalt(12);
+    user.password = await bcrypt.hash(newPassword, salt);
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpiry = undefined;
+    await user.save();
+
+    return ApiResponseUtil.success(
+      res,
+      null,
+      "Password reset successful! Please login."
+    );
+  } catch (error) {
+    console.error("Reset password error:", error);
+    return ApiResponseUtil.serverError(res, "Failed to reset password");
+  }
+};
+
+// Update Profile
+export const updateProfile = async (req, res) => {
+  try {
+    const { fullName, profilePicture } = req.body;
+    const updateData = {};
+
+    if (fullName) {
+      const fullNameValidation = validateFullName(fullName);
+      if (!fullNameValidation.isValid)
+        return ApiResponseUtil.badRequest(res, fullNameValidation.message);
+      updateData.fullName = fullName.trim();
+    }
+
+    if (profilePicture) updateData.profilePicture = profilePicture;
+
+    const user = await User.findByIdAndUpdate(req.user._id, updateData, {
+      new: true,
+      runValidators: true,
+    });
+
+    return ApiResponseUtil.success(
+      res,
+      user.profile,
+      "Profile updated successfully"
+    );
+  } catch (error) {
+    console.error("Update profile error:", error);
+    return ApiResponseUtil.serverError(res, "Failed to update profile");
+  }
+};
+
+// Get User By ID
+export const getUserById = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const user = await User.findById(userId).select(
+      "-password -verificationToken -resetPasswordToken"
+    );
+    if (!user) return ApiResponseUtil.notFound(res, "User not found");
+    return ApiResponseUtil.success(res, user);
+  } catch (error) {
+    console.error("Get user by ID error:", error);
+    return ApiResponseUtil.serverError(res, "Failed to get user");
+  }
+};
+
+// Refresh Token
+export const refreshToken = async (req, res) => {
+  try {
+    const token = req.cookies?.refreshToken;
+    if (!token)
+      return ApiResponseUtil.unauthorized(res, "No refresh token provided");
+
+    const decoded = jwt.verify(token, process.env.JWT_REFRESH_SECRET);
+    const user = await User.findById(decoded.userId);
+    if (!user || !user.isVerified)
+      return ApiResponseUtil.unauthorized(res, "User not found or inactive");
+
+    const newToken = generateToken(user._id, res); // sets cookie + returns token
+
+    return ApiResponseUtil.success(res, { token: newToken }, "Token refreshed");
+  } catch (error) {
+    console.error("Refresh token error:", error);
+    return ApiResponseUtil.unauthorized(
+      res,
+      "Invalid or expired refresh token"
+    );
+  }
+};
+
+// Delete Account
+export const deleteAccount = async (req, res) => {
+  try {
+    const { password } = req.body;
+    if (!password)
+      return ApiResponseUtil.badRequest(
+        res,
+        "Password is required to delete account"
+      );
+
+    const user = await User.findById(req.user._id).select("+password");
+    if (!user) return ApiResponseUtil.notFound(res, "User not found");
+
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid)
+      return ApiResponseUtil.unauthorized(res, "Incorrect password");
+
+    await User.findByIdAndDelete(req.user._id);
+    const isProd = process.env.NODE_ENV === "production";
+    const clearCookieOpts = {
+      expires: new Date(0),
+      httpOnly: true,
+      secure: isProd,
+      sameSite: isProd ? "none" : "lax",
+      path: "/",
+    };
+
+    res.cookie("synkroKey", "", clearCookieOpts);
+    res.cookie("refreshToken", "", clearCookieOpts);
+
+    return ApiResponseUtil.success(res, null, "Account deleted successfully");
+  } catch (error) {
+    console.error("Delete account error:", error);
+    return ApiResponseUtil.serverError(res, "Failed to delete account");
   }
 };
