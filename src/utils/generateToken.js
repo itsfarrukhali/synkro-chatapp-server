@@ -11,9 +11,7 @@ export const generateToken = (userId, res) => {
     expiresIn: "14d",
   });
 
-  const refreshToken = jwt.sign({ userId }, process.env.JWT_REFRESH_SECRET, {
-    expiresIn: "30d",
-  });
+  const refreshToken = generateRefreshToken(userId);
 
   const isProd = process.env.NODE_ENV === "production";
   const cookieOpts = {
@@ -29,7 +27,6 @@ export const generateToken = (userId, res) => {
   });
 
   res.cookie("refreshToken", refreshToken, {
-    // ← ADD THIS
     ...cookieOpts,
     maxAge: 30 * 24 * 60 * 60 * 1000,
   });

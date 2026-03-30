@@ -20,10 +20,6 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.use(cookieParser());
 
-// Cleanup expired blacklisted tokens on startup, then every hour
-cleanupExpiredTokens();
-setInterval(cleanupExpiredTokens, 60 * 60 * 1000);
-
 app.get("/", (_req, res) => {
   ApiResponseUtil.success(
     res,
@@ -52,14 +48,23 @@ app.get("/api/health", (_req, res) => {
 
 const port = process.env.PORT || 3000;
 
-app.listen(port, () => {
-  console.log("\n🚀 ========================================");
-  console.log(`✅ Server running on port ${port}`);
-  console.log(`🌐 http://localhost:${port}`);
-  console.log(`📝 Environment: ${process.env.NODE_ENV || "development"}`);
-  connectDB();
-  console.log("========================================\n");
-});
+const startServer = async () => {
+  await connectDB();
+
+  // Cleanup expired blacklisted tokens on startup, then every hour
+  await cleanupExpiredTokens();
+  setInterval(cleanupExpiredTokens, 60 * 60 * 1000);
+
+  app.listen(port, () => {
+    console.log("\n🚀 ========================================");
+    console.log(`✅ Server running on port ${port}`);
+    console.log(`🌐 http://localhost:${port}`);
+    console.log(`📝 Environment: ${process.env.NODE_ENV || "development"}`);
+    console.log("========================================\n");
+  });
+};
+
+startServer();
 
 process.on("SIGTERM", () => {
   console.log("👋 Shutting down...");

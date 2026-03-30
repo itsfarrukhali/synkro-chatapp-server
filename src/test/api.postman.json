@@ -1124,9 +1124,7 @@
               "listen": "test",
               "script": {
                 "exec": [
-                  "// refreshToken is sent via cookie from login",
-                  "// NOTE: your current generateToken only sets 'synkroKey' (access token)",
-                  "// You need to also set a refreshToken cookie in generateToken for this to work",
+                  "// refreshToken is sent via httpOnly cookie from login (set by generateToken.js)",
                   "pm.test('Response received', () => {",
                   "  pm.expect(pm.response.code).to.be.oneOf([200, 401]);",
                   "});"

@@ -75,8 +75,7 @@ export const signUp = async (req, res) => {
       User
     );
     if (!usernameAvailability.isAvailable) {
-      return ApiResponseUtil.conflict(res, {
-        message: "Username already taken",
+      return ApiResponseUtil.error(res, "Username already taken", 409, {
         suggestions: usernameAvailability.suggestions,
       });
     }
@@ -291,18 +290,21 @@ export const logout = async (req, res) => {
   try {
     const token =
       req.cookies?.synkroKey || req.headers.authorization?.split(" ")[1];
-
-    res.cookie("synkroKey", "", {
+    const isProd = process.env.NODE_ENV === "production";
+    const clearCookieOpts = {
       httpOnly: true,
       expires: new Date(0),
-      secure: process.env.NODE_ENV === "production",
-      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
-    });
+      secure: isProd,
+      sameSite: isProd ? "none" : "lax",
+      path: "/",
+    };
+
+    res.cookie("synkroKey", "", clearCookieOpts);
+    res.cookie("refreshToken", "", clearCookieOpts);
 
     if (token) {
-      const { addToTokenBlacklist } = await import(
-        "../utils/tokenBlacklist.js"
-      );
+      const { addToTokenBlacklist } =
+        await import("../utils/tokenBlacklist.js");
       await addToTokenBlacklist(token);
     }
 
@@ -456,7 +458,11 @@ export const refreshToken = async (req, res) => {
       return ApiResponseUtil.unauthorized(res, "No refresh token provided");
 
     const decoded = jwt.verify(token, process.env.JWT_REFRESH_SECRET);
-    const newToken = generateToken(decoded.userId, res); // sets cookie + returns token
+    const user = await User.findById(decoded.userId);
+    if (!user || !user.isVerified)
+      return ApiResponseUtil.unauthorized(res, "User not found or inactive");
+
+    const newToken = generateToken(user._id, res); // sets cookie + returns token
 
     return ApiResponseUtil.success(res, { token: newToken }, "Token refreshed");
   } catch (error) {
@@ -486,13 +492,17 @@ export const deleteAccount = async (req, res) => {
       return ApiResponseUtil.unauthorized(res, "Incorrect password");
 
     await User.findByIdAndDelete(req.user._id);
-
-    res.cookie("synkroKey", "", {
+    const isProd = process.env.NODE_ENV === "production";
+    const clearCookieOpts = {
       expires: new Date(0),
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
-    });
+      secure: isProd,
+      sameSite: isProd ? "none" : "lax",
+      path: "/",
+    };
+
+    res.cookie("synkroKey", "", clearCookieOpts);
+    res.cookie("refreshToken", "", clearCookieOpts);
 
     return ApiResponseUtil.success(res, null, "Account deleted successfully");
   } catch (error) {

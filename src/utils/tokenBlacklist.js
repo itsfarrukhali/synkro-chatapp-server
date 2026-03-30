@@ -11,7 +11,7 @@ const tokenBlacklistSchema = new mongoose.Schema({
   expiresAt: {
     type: Date,
     required: true,
-    index: { expireAfterSeconds: 0 },
+    expires: 0,
   },
   createdAt: {
     type: Date,
@@ -48,7 +48,7 @@ export const isTokenBlacklisted = async (token) => {
     return !!found;
   } catch (error) {
     console.error("Error checking token blacklist:", error);
-    return false; // fail open
+    return true; // fail closed
   }
 };
 
