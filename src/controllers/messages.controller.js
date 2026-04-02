@@ -57,7 +57,10 @@ export const sendMessage = async (req, res) => {
     // Build reply preview snapshot if replying
     let replyPreview = null;
     if (replyTo) {
-      const parentMsg = await Message.findById(replyTo)
+      const parentMsg = await Message.findOne({
+        _id: replyTo,
+        conversationId,
+      })
         .populate("sender", "fullName")
         .lean();
       if (parentMsg) {
@@ -235,6 +238,18 @@ export const toggleReaction = async (req, res) => {
     });
 
     if (!message) return ApiResponseUtil.notFound(res, "Message not found");
+
+    const conversation = await Conversation.findOne({
+      _id: message.conversationId,
+      participants: userId,
+    }).select("_id");
+
+    if (!conversation) {
+      return ApiResponseUtil.forbidden(
+        res,
+        "Not authorized to react to this message",
+      );
+    }
 
     const reactionIndex = message.reactions.findIndex((r) => r.emoji === emoji);
 

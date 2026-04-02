@@ -1,8 +1,7 @@
 import Conversation from "../models/conversations.model.js";
-import Message from "../models/messages.model.js";
 import User from "../models/user.model.js";
 import ApiResponseUtil from "../utils/apiResponse.js";
-``;
+
 // ─── Create or get DM conversation ───────────────────────────────────────────
 export const getOrCreateDM = async (req, res) => {
   try {
@@ -267,7 +266,9 @@ export const toggleMute = async (req, res) => {
     if (!conversation)
       return ApiResponseUtil.notFound(res, "Conversation not found");
 
-    const isMuted = conversation.mutedBy.includes(userId);
+    const isMuted = conversation.mutedBy.some(
+      (u) => u.toString() === userId.toString(),
+    );
     if (isMuted) {
       conversation.mutedBy = conversation.mutedBy.filter(
         (u) => u.toString() !== userId.toString(),

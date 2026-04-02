@@ -25,7 +25,7 @@ const io = new Server(httpServer, {
   pingInterval: 25000,
 });
 
-// Make io accessible in controllers/routes via req.io
+// Make io accessible in controllers/routes via req.app.get("io")
 app.set("io", io);
 
 if (process.env.NODE_ENV === "development") {
@@ -39,16 +39,12 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.use(cookieParser());
 
-// Cleanup expired blacklisted tokens on startup, then every hour
-cleanupExpiredTokens();
-setInterval(cleanupExpiredTokens, 60 * 60 * 1000);
-
 // ─── Routes ──────────────────────────────────────────────────────────────────
 app.get("/", (_req, res) => {
   ApiResponseUtil.success(
     res,
     { status: "live", timestamp: new Date().toISOString(), version: "1.0.0" },
-    "🚀 Synkro Server is Live!"
+    "🚀 Synkro Server is Live!",
   );
 });
 
@@ -63,7 +59,7 @@ app.get("/api/health", (_req, res) => {
       uptime: process.uptime(),
       timestamp: new Date().toISOString(),
     },
-    "Server is healthy"
+    "Server is healthy",
   );
 });
 
@@ -73,15 +69,31 @@ initSocketHandlers(io);
 // ─── Start ────────────────────────────────────────────────────────────────────
 const port = process.env.PORT || 3000;
 
-httpServer.listen(port, () => {
-  console.log("\n🚀 ========================================");
-  console.log(`✅ Server running on port ${port}`);
-  console.log(`🌐 http://localhost:${port}`);
-  console.log(`🔌 Socket.io enabled`);
-  console.log(`📝 Environment: ${process.env.NODE_ENV || "development"}`);
-  connectDB();
-  console.log("========================================\n");
-});
+async function startServer() {
+  try {
+    await connectDB();
+
+    // Cleanup expired blacklisted tokens on startup, then every hour
+    cleanupExpiredTokens();
+    setInterval(cleanupExpiredTokens, 60 * 60 * 1000);
+
+    httpServer.listen(port, () => {
+      console.log("\n🚀 ========================================");
+      console.log(`✅ Server running on port ${port}`);
+      console.log(`🌐 http://localhost:${port}`);
+      console.log(`🔌 Socket.io enabled`);
+      console.log(`📝 Environment: ${process.env.NODE_ENV || "development"}`);
+      console.log("========================================\n");
+    });
+  } catch (error) {
+    console.error(
+      "❌ Failed to connect to MongoDB. Server not started.",
+      error,
+    );
+    process.exit(1);
+  }
+}
+startServer();
 
 process.on("SIGTERM", () => {
   console.log("👋 Shutting down...");

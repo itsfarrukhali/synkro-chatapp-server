@@ -85,21 +85,41 @@ export const initSocketHandlers = (io) => {
 
     // ─── Join conversation rooms ──────────────────────────────────────────
     socket.on("join:conversation", async ({ conversationId }) => {
-      socket.join(conversationId);
-      const presence = onlineUsers.get(userId);
-      if (presence) {
-        presence.activeConversation = conversationId;
-        onlineUsers.set(userId, presence);
-      }
+      try {
+        // Verify user is a participant in this conversation
+        const conversation = await Conversation.findOne({
+          _id: conversationId,
+          participants: userId,
+        });
+        if (!conversation) {
+          socket.emit("error", {
+            message: "Not a participant in this conversation",
+          });
+          return;
+        }
 
-      const pendingMessages = await Message.find({
-        conversationId,
-        "seenBy.userId": { $ne: userId },
-        isDeleted: false,
-      }).populate("sender", "fullName userName profilePicture").lean();
+        socket.join(conversationId);
+        const presence = onlineUsers.get(userId);
+        if (presence) {
+          presence.activeConversation = conversationId;
+          onlineUsers.set(userId, presence);
+        }
 
-      if (pendingMessages.length > 0) {
-        socket.emit("messages:pending", pendingMessages);
+        const pendingMessages = await Message.find({
+          conversationId,
+          sender: { $ne: userId },
+          "seenBy.userId": { $ne: userId },
+          isDeleted: false,
+        })
+          .populate("sender", "fullName userName profilePicture")
+          .lean();
+
+        if (pendingMessages.length > 0) {
+          socket.emit("messages:pending", pendingMessages);
+        }
+      } catch (error) {
+        console.error("join:conversation error:", error);
+        socket.emit("error", { message: "Failed to join conversation" });
       }
     });
 
@@ -141,7 +161,10 @@ export const initSocketHandlers = (io) => {
           // Build reply preview
           let replyPreview = null;
           if (replyTo) {
-            const parentMsg = await Message.findById(replyTo)
+            const parentMsg = await Message.findOne({
+              _id: replyTo,
+              conversationId,
+            })
               .populate("sender", "fullName")
               .lean();
             if (parentMsg) {
@@ -326,7 +349,12 @@ export const initSocketHandlers = (io) => {
           isDeleted: false,
         });
         if (!message) return;
-
+        // Verify user is a participant in the message's conversation
+        const conversation = await Conversation.findOne({
+          _id: message.conversationId,
+          participants: userId,
+        }).select("_id");
+        if (!conversation) return;
         const reactionIndex = message.reactions.findIndex(
           (r) => r.emoji === emoji,
         );

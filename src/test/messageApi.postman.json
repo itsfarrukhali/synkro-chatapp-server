@@ -265,7 +265,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"groupName\": \"Test Group\",\n  \"participantIds\": [\"{{userBId}}\"]\n}"
+              "raw": "{\n  \"groupName\": \"Test Group\",\n  \"participantIds\": [\"{{userBId}}\", \"{{userCId}}\"]\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/conversations/group",

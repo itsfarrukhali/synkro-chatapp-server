@@ -27,7 +27,7 @@ POST /auth/login
 POST /conversations/dm
 
 {
-"participantId": "otherUserId"
+"targetUserId": "otherUserId"
 }
 
 ## Send Message
