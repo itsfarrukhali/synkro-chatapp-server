@@ -205,19 +205,40 @@ export const initSocketHandlers = (io) => {
           await conversation.save();
 
           // Broadcast new message to all room members (convert to plain JSON)
-          io.to(conversationId).emit(
-            "message:new",
-            message.toObject ? message.toObject() : message,
-          );
+          const messagePayload = message.toObject
+            ? message.toObject()
+            : message;
+          io.to(conversationId).emit("message:new", messagePayload);
 
           // Broadcast updated conversation (for sidebar list refresh)
-          io.to(conversationId).emit("conversation:updated", {
+          const conversationUpdatePayload = {
             conversationId,
             lastMessage: conversation.lastMessage?.toObject
               ? conversation.lastMessage.toObject()
               : conversation.lastMessage,
             unreadCounts: Object.fromEntries(conversation.unreadCounts),
-          });
+          };
+
+          io.to(conversationId).emit(
+            "conversation:updated",
+            conversationUpdatePayload,
+          );
+
+          // Ensure participants not joined to the room still receive updates.
+          for (const participantId of conversation.participants) {
+            const pid = participantId.toString();
+            const presence = onlineUsers.get(pid);
+            if (!presence) continue;
+
+            // Skip direct emits for users already active in this conversation room.
+            if (presence.activeConversation === conversationId) continue;
+
+            io.to(presence.socketId).emit("message:new", messagePayload);
+            io.to(presence.socketId).emit(
+              "conversation:updated",
+              conversationUpdatePayload,
+            );
+          }
         } catch (error) {
           console.error("message:send error:", error);
           socket.emit("error", { message: "Failed to send message" });
@@ -226,19 +247,79 @@ export const initSocketHandlers = (io) => {
     );
 
     // ─── Edit message ─────────────────────────────────────────────────────
+    socket.on("message:delivered", async ({ conversationId, messageId }) => {
+      try {
+        if (!conversationId || !messageId) return;
+
+        const message = await Message.findOne({
+          _id: messageId,
+          conversationId,
+          sender: { $ne: userId },
+          isDeleted: false,
+        });
+        if (!message) return;
+
+        const alreadyDelivered = message.deliveredTo.some(
+          (d) => d.userId.toString() === userId,
+        );
+        if (!alreadyDelivered) {
+          message.deliveredTo.push({ userId, deliveredAt: new Date() });
+          await message.save();
+        }
+
+        // Notify sender that recipient device has received the message.
+        const senderPresence = onlineUsers.get(message.sender.toString());
+        if (senderPresence) {
+          io.to(senderPresence.socketId).emit("message:delivered", {
+            conversationId,
+            messageId,
+            userId,
+          });
+        }
+      } catch (error) {
+        console.error("message:delivered error:", error);
+      }
+    });
+
     socket.on("message:edit", async ({ messageId, content }) => {
       try {
-        if (!content?.trim()) return;
+        if (!content?.trim()) {
+          socket.emit("error", { message: "Message cannot be empty" });
+          return;
+        }
 
         const message = await Message.findOne({
           _id: messageId,
           sender: userId,
           isDeleted: false,
           type: "text",
-        });
+        }).populate("conversationId");
 
         if (!message) {
           socket.emit("error", { message: "Cannot edit this message" });
+          return;
+        }
+
+        // Verify user is still a conversation participant
+        const isParticipant = message.conversationId.participants.some(
+          (p) => p.toString() === userId,
+        );
+        if (!isParticipant) {
+          socket.emit("error", {
+            message: "Cannot edit: not a conversation participant",
+          });
+          return;
+        }
+
+        // Enforce edit time limit (30 minutes)
+        const editTimeLimit = 30 * 60 * 1000;
+        if (
+          Date.now() - new Date(message.createdAt).getTime() >
+          editTimeLimit
+        ) {
+          socket.emit("error", {
+            message: "Cannot edit messages older than 30 minutes",
+          });
           return;
         }
 
@@ -246,12 +327,14 @@ export const initSocketHandlers = (io) => {
         message.isEdited = true;
         message.editedAt = new Date();
         await message.save();
-        await message.populate("sender", "fullName userName profilePicture");
 
-        io.to(message.conversationId.toString()).emit(
-          "message:updated",
-          message,
-        );
+        io.to(message.conversationId._id.toString()).emit("message:updated", {
+          messageId: message._id,
+          conversationId: message.conversationId._id,
+          content: message.content,
+          isEdited: message.isEdited,
+          editedAt: message.editedAt,
+        });
       } catch (error) {
         console.error("message:edit error:", error);
         socket.emit("error", { message: "Failed to edit message" });
@@ -264,21 +347,33 @@ export const initSocketHandlers = (io) => {
         const message = await Message.findOne({
           _id: messageId,
           sender: userId,
-        });
+        }).populate("conversationId");
 
         if (!message) {
-          socket.emit("error", { message: "Message not found" });
+          socket.emit("error", { message: "Cannot delete this message" });
           return;
         }
 
+        // Verify user is still a conversation participant
+        const isParticipant = message.conversationId.participants.some(
+          (p) => p.toString() === userId,
+        );
+        if (!isParticipant) {
+          socket.emit("error", {
+            message: "Cannot delete: not a conversation participant",
+          });
+          return;
+        }
+
+        // Mark message as deleted (soft delete)
         message.isDeleted = true;
         message.content = "";
         message.mediaUrl = null;
         await message.save();
 
-        io.to(message.conversationId.toString()).emit("message:updated", {
-          _id: message._id,
-          conversationId: message.conversationId,
+        io.to(message.conversationId._id.toString()).emit("message:updated", {
+          messageId: message._id,
+          conversationId: message.conversationId._id,
           isDeleted: true,
           content: "",
         });
@@ -320,17 +415,15 @@ export const initSocketHandlers = (io) => {
         conversation.resetUnread(userId);
         await conversation.save();
 
-        // Notify each unique sender that their messages were seen
-        const senderIds = [
-          ...new Set(unseenMessages.map((m) => m.sender.toString())),
-        ];
-        for (const senderId of senderIds) {
+        // Notify senders that their messages were seen - emit individual message updates
+        for (const msg of unseenMessages) {
+          const senderId = msg.sender.toString();
           const senderPresence = onlineUsers.get(senderId);
           if (senderPresence) {
-            io.to(senderPresence.socketId).emit("message:seen", {
+            io.to(senderPresence.socketId).emit("message:updated", {
+              messageId: msg._id,
               conversationId,
-              userId,
-              seenAt: now,
+              seenBy: [{ userId, seenAt: now }],
             });
           }
         }
@@ -355,30 +448,59 @@ export const initSocketHandlers = (io) => {
           participants: userId,
         }).select("_id");
         if (!conversation) return;
-        const reactionIndex = message.reactions.findIndex(
-          (r) => r.emoji === emoji,
+
+        // One reaction per user per message:
+        // - If user clicks same emoji again => unreact
+        // - If user clicks a different emoji => replace old with new
+        const uid = userId.toString();
+        const currentReactionIndex = message.reactions.findIndex((r) =>
+          r.users.some((u) => u.toString() === uid),
         );
 
-        if (reactionIndex === -1) {
-          message.reactions.push({ emoji, users: [userId] });
-        } else {
-          const reaction = message.reactions[reactionIndex];
-          const userIdx = reaction.users.findIndex(
-            (u) => u.toString() === userId.toString(),
-          );
-          if (userIdx === -1) {
-            reaction.users.push(userId);
+        if (currentReactionIndex !== -1) {
+          const currentReaction = message.reactions[currentReactionIndex];
+          if (currentReaction.emoji === emoji) {
+            currentReaction.users = currentReaction.users.filter(
+              (u) => u.toString() !== uid,
+            );
+            if (currentReaction.users.length === 0) {
+              message.reactions.splice(currentReactionIndex, 1);
+            }
           } else {
-            reaction.users.splice(userIdx, 1);
-            if (reaction.users.length === 0)
-              message.reactions.splice(reactionIndex, 1);
+            currentReaction.users = currentReaction.users.filter(
+              (u) => u.toString() !== uid,
+            );
+            if (currentReaction.users.length === 0) {
+              message.reactions.splice(currentReactionIndex, 1);
+            }
+
+            const targetIndex = message.reactions.findIndex(
+              (r) => r.emoji === emoji,
+            );
+            if (targetIndex === -1) {
+              message.reactions.push({ emoji, users: [userId] });
+            } else {
+              message.reactions[targetIndex].users.push(userId);
+            }
+          }
+        } else {
+          const targetIndex = message.reactions.findIndex(
+            (r) => r.emoji === emoji,
+          );
+          if (targetIndex === -1) {
+            message.reactions.push({ emoji, users: [userId] });
+          } else {
+            message.reactions[targetIndex].users.push(userId);
           }
         }
 
+        // Explicitly mark reactions as modified for Mongoose to save array changes
+        message.markModified("reactions");
         await message.save();
 
         io.to(message.conversationId.toString()).emit("reaction:updated", {
           messageId,
+          conversationId: message.conversationId.toString(),
           reactions: message.reactions,
         });
       } catch (error) {

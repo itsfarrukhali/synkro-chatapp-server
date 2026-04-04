@@ -251,30 +251,50 @@ export const toggleReaction = async (req, res) => {
       );
     }
 
-    const reactionIndex = message.reactions.findIndex((r) => r.emoji === emoji);
+    // One reaction per user per message:
+    // - Click same emoji => remove reaction
+    // - Click different emoji => replace previous reaction
+    const uid = userId.toString();
+    const currentReactionIndex = message.reactions.findIndex((r) =>
+      r.users.some((u) => u.toString() === uid),
+    );
 
-    if (reactionIndex === -1) {
-      // New emoji — create reaction entry
-      message.reactions.push({ emoji, users: [userId] });
-    } else {
-      const reaction = message.reactions[reactionIndex];
-      const userIndex = reaction.users.findIndex(
-        (u) => u.toString() === userId.toString(),
-      );
-
-      if (userIndex === -1) {
-        // Add user to existing emoji
-        reaction.users.push(userId);
-      } else {
-        // Remove user's reaction
-        reaction.users.splice(userIndex, 1);
-        // Remove emoji entirely if no users left
-        if (reaction.users.length === 0) {
-          message.reactions.splice(reactionIndex, 1);
+    if (currentReactionIndex !== -1) {
+      const currentReaction = message.reactions[currentReactionIndex];
+      if (currentReaction.emoji === emoji) {
+        currentReaction.users = currentReaction.users.filter(
+          (u) => u.toString() !== uid,
+        );
+        if (currentReaction.users.length === 0) {
+          message.reactions.splice(currentReactionIndex, 1);
         }
+      } else {
+        currentReaction.users = currentReaction.users.filter(
+          (u) => u.toString() !== uid,
+        );
+        if (currentReaction.users.length === 0) {
+          message.reactions.splice(currentReactionIndex, 1);
+        }
+
+        const targetIndex = message.reactions.findIndex(
+          (r) => r.emoji === emoji,
+        );
+        if (targetIndex === -1) {
+          message.reactions.push({ emoji, users: [userId] });
+        } else {
+          message.reactions[targetIndex].users.push(userId);
+        }
+      }
+    } else {
+      const targetIndex = message.reactions.findIndex((r) => r.emoji === emoji);
+      if (targetIndex === -1) {
+        message.reactions.push({ emoji, users: [userId] });
+      } else {
+        message.reactions[targetIndex].users.push(userId);
       }
     }
 
+    message.markModified("reactions");
     await message.save();
 
     return ApiResponseUtil.success(

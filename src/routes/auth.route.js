@@ -7,6 +7,7 @@ import {
   resendVerificationEmail,
   login,
   checkUsername,
+  searchUsers,
   logout,
   forgotPassword,
   resetPassword,
@@ -64,6 +65,7 @@ router.post("/refresh-token", refreshToken);
 router.use(protect);
 
 router.post("/logout", logout);
+router.get("/search/users", searchUsers);
 router.get("/me", getCurrentUser);
 router.put("/profile", updateProfile);
 router.delete("/account", deleteAccount);

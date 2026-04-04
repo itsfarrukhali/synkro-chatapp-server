@@ -1,4 +1,5 @@
 import User from "../models/user.model.js";
+import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { generateToken } from "../utils/generateToken.js";
@@ -16,6 +17,8 @@ import {
   sendPasswordResetEmail,
   generateToken as generateVerificationToken,
 } from "../services/email.service.js";
+
+const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 // Check Username
 export const checkUsername = async (req, res) => {
@@ -40,7 +43,7 @@ export const checkUsername = async (req, res) => {
     console.error("Username check error:", error);
     return ApiResponseUtil.serverError(
       res,
-      "Failed to check username availability"
+      "Failed to check username availability",
     );
   }
 };
@@ -55,6 +58,7 @@ export const signUp = async (req, res) => {
       return ApiResponseUtil.badRequest(res, emailValidation.message);
 
     const usernameValidation = validateUsername(userName);
+
     if (!usernameValidation.isValid)
       return ApiResponseUtil.badRequest(res, usernameValidation.message);
 
@@ -72,7 +76,7 @@ export const signUp = async (req, res) => {
 
     const usernameAvailability = await checkUsernameAvailability(
       userName,
-      User
+      User,
     );
     if (!usernameAvailability.isAvailable) {
       return ApiResponseUtil.error(res, "Username already taken", 409, {
@@ -93,7 +97,7 @@ export const signUp = async (req, res) => {
       email: email.toLowerCase().trim(),
       password: hashedPassword,
       profilePicture: `https://ui-avatars.com/api/?background=667eea&color=fff&bold=true&name=${encodeURIComponent(
-        fullName
+        fullName,
       )}&size=128`,
       isVerified: false,
       verificationToken,
@@ -105,7 +109,7 @@ export const signUp = async (req, res) => {
     const emailResult = await sendVerificationEmail(
       newUser.email,
       newUser.fullName,
-      verificationToken
+      verificationToken,
     );
 
     const userData = {
@@ -127,7 +131,7 @@ export const signUp = async (req, res) => {
           emailWarning:
             "Verification email could not be sent. Please contact support.",
         },
-        "Account created! Email verification failed — contact support."
+        "Account created! Email verification failed — contact support.",
       );
     }
 
@@ -137,7 +141,7 @@ export const signUp = async (req, res) => {
         ...userData,
         message: "Verification email sent! Please check your inbox.",
       },
-      "Account created! Please verify your email."
+      "Account created! Please verify your email.",
     );
   } catch (error) {
     console.error("Signup error:", error);
@@ -145,7 +149,7 @@ export const signUp = async (req, res) => {
       const field = Object.keys(error.keyPattern)[0];
       return ApiResponseUtil.conflict(
         res,
-        `${field === "email" ? "Email" : "Username"} already exists`
+        `${field === "email" ? "Email" : "Username"} already exists`,
       );
     }
     return ApiResponseUtil.serverError(res, "Unable to create account");
@@ -168,7 +172,7 @@ export const verifyEmail = async (req, res) => {
     if (!user) {
       return ApiResponseUtil.badRequest(
         res,
-        "Invalid or expired verification token. Please request a new verification email."
+        "Invalid or expired verification token. Please request a new verification email.",
       );
     }
 
@@ -179,7 +183,7 @@ export const verifyEmail = async (req, res) => {
 
     // Fire and forget — don't block response
     sendWelcomeEmail(user.email, user.fullName, user.userName).catch(
-      console.error
+      console.error,
     );
 
     const authToken = generateToken(user._id, res);
@@ -190,7 +194,7 @@ export const verifyEmail = async (req, res) => {
         user: user.profile,
         token: authToken,
       },
-      "Email verified! Welcome to Synkro 🎉"
+      "Email verified! Welcome to Synkro 🎉",
     );
   } catch (error) {
     console.error("Verification error:", error);
@@ -211,7 +215,7 @@ export const resendVerificationEmail = async (req, res) => {
     if (!user)
       return ApiResponseUtil.badRequest(
         res,
-        "User not found or already verified"
+        "User not found or already verified",
       );
 
     const verificationToken = generateVerificationToken();
@@ -225,12 +229,12 @@ export const resendVerificationEmail = async (req, res) => {
     const emailResult = await sendVerificationEmail(
       user.email,
       user.fullName,
-      verificationToken
+      verificationToken,
     );
     if (!emailResult.success)
       return ApiResponseUtil.serverError(
         res,
-        "Failed to send verification email"
+        "Failed to send verification email",
       );
 
     return ApiResponseUtil.success(res, null, "Verification email sent!");
@@ -238,7 +242,7 @@ export const resendVerificationEmail = async (req, res) => {
     console.error("Resend verification error:", error);
     return ApiResponseUtil.serverError(
       res,
-      "Failed to resend verification email"
+      "Failed to resend verification email",
     );
   }
 };
@@ -251,14 +255,14 @@ export const login = async (req, res) => {
       return ApiResponseUtil.badRequest(res, "Email and password are required");
 
     const user = await User.findOne({ email: email.toLowerCase() }).select(
-      "+password"
+      "+password",
     );
     if (!user) return ApiResponseUtil.unauthorized(res, "Invalid credentials");
 
     if (!user.isVerified) {
       return ApiResponseUtil.unauthorized(
         res,
-        "Please verify your email before logging in. Check your inbox for the verification link."
+        "Please verify your email before logging in. Check your inbox for the verification link.",
       );
     }
 
@@ -277,7 +281,7 @@ export const login = async (req, res) => {
         user: user.profile,
         token,
       },
-      "Login successful!"
+      "Login successful!",
     );
   } catch (error) {
     console.error("Login error:", error);
@@ -328,7 +332,7 @@ export const getCurrentUser = async (req, res) => {
     return ApiResponseUtil.success(
       res,
       req.user.profile,
-      "User fetched successfully"
+      "User fetched successfully",
     );
   } catch (error) {
     console.error("Get current user error:", error);
@@ -372,7 +376,7 @@ export const resetPassword = async (req, res) => {
     if (!token || !newPassword)
       return ApiResponseUtil.badRequest(
         res,
-        "Token and new password are required"
+        "Token and new password are required",
       );
 
     const passwordValidation = validatePassword(newPassword);
@@ -396,7 +400,7 @@ export const resetPassword = async (req, res) => {
     return ApiResponseUtil.success(
       res,
       null,
-      "Password reset successful! Please login."
+      "Password reset successful! Please login.",
     );
   } catch (error) {
     console.error("Reset password error:", error);
@@ -420,14 +424,14 @@ export const updateProfile = async (req, res) => {
     if (profilePicture) updateData.profilePicture = profilePicture;
 
     const user = await User.findByIdAndUpdate(req.user._id, updateData, {
-      new: true,
+      returnDocument: "after",
       runValidators: true,
     });
 
     return ApiResponseUtil.success(
       res,
       user.profile,
-      "Profile updated successfully"
+      "Profile updated successfully",
     );
   } catch (error) {
     console.error("Update profile error:", error);
@@ -439,14 +443,56 @@ export const updateProfile = async (req, res) => {
 export const getUserById = async (req, res) => {
   try {
     const { userId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return ApiResponseUtil.notFound(res, "User not found");
+    }
     const user = await User.findById(userId).select(
-      "-password -verificationToken -resetPasswordToken"
+      "-password -verificationToken -resetPasswordToken",
     );
     if (!user) return ApiResponseUtil.notFound(res, "User not found");
     return ApiResponseUtil.success(res, user);
   } catch (error) {
     console.error("Get user by ID error:", error);
     return ApiResponseUtil.serverError(res, "Failed to get user");
+  }
+};
+
+// Search Users
+export const searchUsers = async (req, res) => {
+  try {
+    const query = (req.query.q || req.query.query || "").trim();
+    if (!query) {
+      return ApiResponseUtil.success(res, { users: [] }, "Users fetched");
+    }
+
+    const pattern = new RegExp(escapeRegex(query), "i");
+    const currentUserId = req.user?._id?.toString();
+
+    const users = await User.find({
+      isVerified: true,
+      $or: [{ fullName: pattern }, { userName: pattern }, { email: pattern }],
+    })
+      .select("fullName userName profilePicture status isVerified")
+      .limit(20)
+      .lean();
+
+    const normalizedUsers = users
+      .filter((user) => user._id.toString() !== currentUserId)
+      .map((user) => ({
+        ...user,
+        name: user.fullName,
+        username: user.userName,
+        avatar: user.profilePicture,
+      }));
+
+    return ApiResponseUtil.success(
+      res,
+      { users: normalizedUsers },
+      "Users fetched",
+    );
+  } catch (error) {
+    console.error("searchUsers error:", error);
+    return ApiResponseUtil.serverError(res, "Failed to search users");
   }
 };
 
@@ -469,7 +515,7 @@ export const refreshToken = async (req, res) => {
     console.error("Refresh token error:", error);
     return ApiResponseUtil.unauthorized(
       res,
-      "Invalid or expired refresh token"
+      "Invalid or expired refresh token",
     );
   }
 };
@@ -481,7 +527,7 @@ export const deleteAccount = async (req, res) => {
     if (!password)
       return ApiResponseUtil.badRequest(
         res,
-        "Password is required to delete account"
+        "Password is required to delete account",
       );
 
     const user = await User.findById(req.user._id).select("+password");
