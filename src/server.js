@@ -1,24 +1,33 @@
 import express from "express";
 import { createServer } from "http";
 import { Server } from "socket.io";
-import dotenv from "dotenv";
+import "dotenv/config";
 import cookieParser from "cookie-parser";
 import cors from "cors";
+import path from "path";
+import { fileURLToPath } from "url";
 import ApiResponseUtil from "./utils/apiResponse.js";
 import { connectDB } from "./lib/db.js";
 import userRouter from "./routes/auth.route.js";
 import conversationRouter from "./routes/conversations.route.js";
+import uploadRouter from "./routes/upload.route.js";
 import { cleanupExpiredTokens } from "./utils/tokenBlacklist.js";
 import { initSocketHandlers } from "./socket/sockets.handler.js";
 
-dotenv.config();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const allowedOrigins = [
+  process.env.FRONTEND_URL,
+  "http://localhost:5173",
+].filter(Boolean);
 
 const app = express();
 const httpServer = createServer(app); // wrap express in http server for socket.io
 
 const io = new Server(httpServer, {
   cors: {
-    origin: process.env.FRONTEND_URL || "http://localhost:5173",
+    origin: allowedOrigins,
     credentials: true,
     methods: ["GET", "POST"],
   },
@@ -37,7 +46,7 @@ if (process.env.NODE_ENV === "development") {
 }
 
 const corsOptions = {
-  origin: process.env.FRONTEND_URL || "http://localhost:5173",
+  origin: allowedOrigins,
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
@@ -49,6 +58,9 @@ app.options(/.*/, cors(corsOptions));
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.use(cookieParser());
+if (process.env.NODE_ENV !== "production") {
+  app.use("/uploads", express.static(path.resolve(__dirname, "../uploads")));
+}
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
 app.get("/", (_req, res) => {
@@ -61,6 +73,9 @@ app.get("/", (_req, res) => {
 
 app.use("/api/auth", userRouter);
 app.use("/api/conversations", conversationRouter);
+app.use("/api/upload", uploadRouter);
+// Backward-compatible alias used by older frontend builds
+app.use("/api/messages/upload", uploadRouter);
 
 app.get("/api/health", (_req, res) => {
   ApiResponseUtil.success(
